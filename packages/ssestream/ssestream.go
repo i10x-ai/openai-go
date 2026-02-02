@@ -174,6 +174,11 @@ func (s *Stream[T]) Next() bool {
 			continue
 		}
 
+		// Skip events with empty data (e.g., from SSE retry: or comment lines)
+		if len(s.decoder.Event().Data) == 0 {
+			continue
+		}
+
 		ep := gjson.GetBytes(s.decoder.Event().Data, "error")
 		if ep.Exists() {
 			s.err = &StreamError{
