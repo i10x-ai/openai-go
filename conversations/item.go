@@ -22,6 +22,8 @@ import (
 	"github.com/openai/openai-go/v3/shared/constant"
 )
 
+// Manage conversations and conversation items.
+//
 // ItemService contains methods and other services that help with interacting with
 // the openai API.
 //
@@ -46,11 +48,11 @@ func (r *ItemService) New(ctx context.Context, conversationID string, params Ite
 	opts = slices.Concat(r.Options, opts)
 	if conversationID == "" {
 		err = errors.New("missing required conversation_id parameter")
-		return
+		return nil, err
 	}
 	path := fmt.Sprintf("conversations/%s/items", conversationID)
 	err = requestconfig.ExecuteNewRequest(ctx, http.MethodPost, path, params, &res, opts...)
-	return
+	return res, err
 }
 
 // Get a single item from a conversation with the given IDs.
@@ -58,15 +60,15 @@ func (r *ItemService) Get(ctx context.Context, conversationID string, itemID str
 	opts = slices.Concat(r.Options, opts)
 	if conversationID == "" {
 		err = errors.New("missing required conversation_id parameter")
-		return
+		return nil, err
 	}
 	if itemID == "" {
 		err = errors.New("missing required item_id parameter")
-		return
+		return nil, err
 	}
 	path := fmt.Sprintf("conversations/%s/items/%s", conversationID, itemID)
 	err = requestconfig.ExecuteNewRequest(ctx, http.MethodGet, path, query, &res, opts...)
-	return
+	return res, err
 }
 
 // List all items for a conversation with the given ID.
@@ -76,7 +78,7 @@ func (r *ItemService) List(ctx context.Context, conversationID string, query Ite
 	opts = append([]option.RequestOption{option.WithResponseInto(&raw)}, opts...)
 	if conversationID == "" {
 		err = errors.New("missing required conversation_id parameter")
-		return
+		return nil, err
 	}
 	path := fmt.Sprintf("conversations/%s/items", conversationID)
 	cfg, err := requestconfig.NewRequestConfig(ctx, http.MethodGet, path, query, &res, opts...)
@@ -101,15 +103,15 @@ func (r *ItemService) Delete(ctx context.Context, conversationID string, itemID 
 	opts = slices.Concat(r.Options, opts)
 	if conversationID == "" {
 		err = errors.New("missing required conversation_id parameter")
-		return
+		return nil, err
 	}
 	if itemID == "" {
 		err = errors.New("missing required item_id parameter")
-		return
+		return nil, err
 	}
 	path := fmt.Sprintf("conversations/%s/items/%s", conversationID, itemID)
 	err = requestconfig.ExecuteNewRequest(ctx, http.MethodDelete, path, nil, &res, opts...)
-	return
+	return res, err
 }
 
 // ConversationItemUnion contains all possible properties and values from
@@ -118,6 +120,7 @@ func (r *ItemService) Delete(ctx context.Context, conversationID string, itemID 
 // [responses.ResponseFileSearchToolCall], [responses.ResponseFunctionWebSearch],
 // [ConversationItemImageGenerationCall], [responses.ResponseComputerToolCall],
 // [responses.ResponseComputerToolCallOutputItem],
+// [responses.ResponseToolSearchCall], [responses.ResponseToolSearchOutputItem],
 // [responses.ResponseReasoningItem], [responses.ResponseCodeInterpreterToolCall],
 // [ConversationItemLocalShellCall], [ConversationItemLocalShellCallOutput],
 // [responses.ResponseFunctionShellToolCall],
@@ -141,15 +144,18 @@ type ConversationItemUnion struct {
 	Status string      `json:"status"`
 	// Any of "message", "function_call", "function_call_output", "file_search_call",
 	// "web_search_call", "image_generation_call", "computer_call",
-	// "computer_call_output", "reasoning", "code_interpreter_call",
-	// "local_shell_call", "local_shell_call_output", "shell_call",
-	// "shell_call_output", "apply_patch_call", "apply_patch_call_output",
-	// "mcp_list_tools", "mcp_approval_request", "mcp_approval_response", "mcp_call",
-	// "custom_tool_call", "custom_tool_call_output".
-	Type      string `json:"type"`
-	Arguments string `json:"arguments"`
-	CallID    string `json:"call_id"`
-	Name      string `json:"name"`
+	// "computer_call_output", "tool_search_call", "tool_search_output", "reasoning",
+	// "code_interpreter_call", "local_shell_call", "local_shell_call_output",
+	// "shell_call", "shell_call_output", "apply_patch_call",
+	// "apply_patch_call_output", "mcp_list_tools", "mcp_approval_request",
+	// "mcp_approval_response", "mcp_call", "custom_tool_call",
+	// "custom_tool_call_output".
+	Type string `json:"type"`
+	// This field is a union of [string], [any], [string], [string]
+	Arguments ConversationItemUnionArguments `json:"arguments"`
+	CallID    string                         `json:"call_id"`
+	Name      string                         `json:"name"`
+	Namespace string                         `json:"namespace"`
 	// This field is a union of
 	// [responses.ResponseFunctionToolCallOutputItemOutputUnion],
 	// [responses.ResponseComputerToolCallOutputScreenshot], [string],
@@ -169,8 +175,15 @@ type ConversationItemUnion struct {
 	Result string `json:"result"`
 	// This field is from variant [responses.ResponseComputerToolCall].
 	PendingSafetyChecks []responses.ResponseComputerToolCallPendingSafetyCheck `json:"pending_safety_checks"`
+	// This field is from variant [responses.ResponseComputerToolCall].
+	Actions responses.ComputerActionList `json:"actions"`
 	// This field is from variant [responses.ResponseComputerToolCallOutputItem].
 	AcknowledgedSafetyChecks []responses.ResponseComputerToolCallOutputItemAcknowledgedSafetyCheck `json:"acknowledged_safety_checks"`
+	Execution                string                                                                `json:"execution"`
+	CreatedBy                string                                                                `json:"created_by"`
+	// This field is a union of [[]responses.ToolUnion],
+	// [[]ConversationItemMcpListToolsTool]
+	Tools ConversationItemUnionTools `json:"tools"`
 	// This field is from variant [responses.ResponseReasoningItem].
 	Summary []responses.ResponseReasoningItemSummary `json:"summary"`
 	// This field is from variant [responses.ResponseReasoningItem].
@@ -180,17 +193,16 @@ type ConversationItemUnion struct {
 	// This field is from variant [responses.ResponseCodeInterpreterToolCall].
 	ContainerID string `json:"container_id"`
 	// This field is from variant [responses.ResponseCodeInterpreterToolCall].
-	Outputs   []responses.ResponseCodeInterpreterToolCallOutputUnion `json:"outputs"`
-	CreatedBy string                                                 `json:"created_by"`
+	Outputs []responses.ResponseCodeInterpreterToolCallOutputUnion `json:"outputs"`
+	// This field is from variant [responses.ResponseFunctionShellToolCall].
+	Environment responses.ResponseFunctionShellToolCallEnvironmentUnion `json:"environment"`
 	// This field is from variant [responses.ResponseFunctionShellToolCallOutput].
 	MaxOutputLength int64 `json:"max_output_length"`
 	// This field is from variant [responses.ResponseApplyPatchToolCall].
-	Operation   responses.ResponseApplyPatchToolCallOperationUnion `json:"operation"`
-	ServerLabel string                                             `json:"server_label"`
-	// This field is from variant [ConversationItemMcpListTools].
-	Tools             []ConversationItemMcpListToolsTool `json:"tools"`
-	Error             string                             `json:"error"`
-	ApprovalRequestID string                             `json:"approval_request_id"`
+	Operation         responses.ResponseApplyPatchToolCallOperationUnion `json:"operation"`
+	ServerLabel       string                                             `json:"server_label"`
+	Error             string                                             `json:"error"`
+	ApprovalRequestID string                                             `json:"approval_request_id"`
 	// This field is from variant [ConversationItemMcpApprovalResponse].
 	Approve bool `json:"approve"`
 	// This field is from variant [ConversationItemMcpApprovalResponse].
@@ -206,23 +218,27 @@ type ConversationItemUnion struct {
 		Arguments                respjson.Field
 		CallID                   respjson.Field
 		Name                     respjson.Field
+		Namespace                respjson.Field
 		Output                   respjson.Field
 		Queries                  respjson.Field
 		Results                  respjson.Field
 		Action                   respjson.Field
 		Result                   respjson.Field
 		PendingSafetyChecks      respjson.Field
+		Actions                  respjson.Field
 		AcknowledgedSafetyChecks respjson.Field
+		Execution                respjson.Field
+		CreatedBy                respjson.Field
+		Tools                    respjson.Field
 		Summary                  respjson.Field
 		EncryptedContent         respjson.Field
 		Code                     respjson.Field
 		ContainerID              respjson.Field
 		Outputs                  respjson.Field
-		CreatedBy                respjson.Field
+		Environment              respjson.Field
 		MaxOutputLength          respjson.Field
 		Operation                respjson.Field
 		ServerLabel              respjson.Field
-		Tools                    respjson.Field
 		Error                    respjson.Field
 		ApprovalRequestID        respjson.Field
 		Approve                  respjson.Field
@@ -258,6 +274,8 @@ func (ConversationItemMcpCall) ImplConversationItemUnion()              {}
 //	case conversations.ConversationItemImageGenerationCall:
 //	case responses.ResponseComputerToolCall:
 //	case responses.ResponseComputerToolCallOutputItem:
+//	case responses.ResponseToolSearchCall:
+//	case responses.ResponseToolSearchOutputItem:
 //	case responses.ResponseReasoningItem:
 //	case responses.ResponseCodeInterpreterToolCall:
 //	case conversations.ConversationItemLocalShellCall:
@@ -293,6 +311,10 @@ func (u ConversationItemUnion) AsAny() anyConversationItem {
 		return u.AsComputerCall()
 	case "computer_call_output":
 		return u.AsComputerCallOutput()
+	case "tool_search_call":
+		return u.AsToolSearchCall()
+	case "tool_search_output":
+		return u.AsToolSearchOutput()
 	case "reasoning":
 		return u.AsReasoning()
 	case "code_interpreter_call":
@@ -361,6 +383,16 @@ func (u ConversationItemUnion) AsComputerCall() (v responses.ResponseComputerToo
 }
 
 func (u ConversationItemUnion) AsComputerCallOutput() (v responses.ResponseComputerToolCallOutputItem) {
+	apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)
+	return
+}
+
+func (u ConversationItemUnion) AsToolSearchCall() (v responses.ResponseToolSearchCall) {
+	apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)
+	return
+}
+
+func (u ConversationItemUnion) AsToolSearchOutput() (v responses.ResponseToolSearchOutputItem) {
 	apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)
 	return
 }
@@ -466,6 +498,31 @@ type ConversationItemUnionContent struct {
 }
 
 func (r *ConversationItemUnionContent) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, r)
+}
+
+// ConversationItemUnionArguments is an implicit subunion of
+// [ConversationItemUnion]. ConversationItemUnionArguments provides convenient
+// access to the sub-properties of the union.
+//
+// For type safety it is recommended to directly use a variant of the
+// [ConversationItemUnion].
+//
+// If the underlying value is not a json object, one of the following properties
+// will be valid: OfString OfResponseToolSearchCallArguments]
+type ConversationItemUnionArguments struct {
+	// This field will be present if the value is a [string] instead of an object.
+	OfString string `json:",inline"`
+	// This field will be present if the value is a [any] instead of an object.
+	OfResponseToolSearchCallArguments any `json:",inline"`
+	JSON                              struct {
+		OfString                          respjson.Field
+		OfResponseToolSearchCallArguments respjson.Field
+		raw                               string
+	} `json:"-"`
+}
+
+func (r *ConversationItemUnionArguments) UnmarshalJSON(data []byte) error {
 	return apijson.UnmarshalRoot(data, r)
 }
 
@@ -584,18 +641,45 @@ func (r *ConversationItemUnionAction) UnmarshalJSON(data []byte) error {
 	return apijson.UnmarshalRoot(data, r)
 }
 
+// ConversationItemUnionTools is an implicit subunion of [ConversationItemUnion].
+// ConversationItemUnionTools provides convenient access to the sub-properties of
+// the union.
+//
+// For type safety it is recommended to directly use a variant of the
+// [ConversationItemUnion].
+//
+// If the underlying value is not a json object, one of the following properties
+// will be valid: OfToolArray OfConversationItemMcpListToolsTools]
+type ConversationItemUnionTools struct {
+	// This field will be present if the value is a [[]responses.ToolUnion] instead of
+	// an object.
+	OfToolArray []responses.ToolUnion `json:",inline"`
+	// This field will be present if the value is a
+	// [[]ConversationItemMcpListToolsTool] instead of an object.
+	OfConversationItemMcpListToolsTools []ConversationItemMcpListToolsTool `json:",inline"`
+	JSON                                struct {
+		OfToolArray                         respjson.Field
+		OfConversationItemMcpListToolsTools respjson.Field
+		raw                                 string
+	} `json:"-"`
+}
+
+func (r *ConversationItemUnionTools) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, r)
+}
+
 // An image generation request made by the model.
 type ConversationItemImageGenerationCall struct {
 	// The unique ID of the image generation call.
-	ID string `json:"id,required"`
+	ID string `json:"id" api:"required"`
 	// The generated image encoded in base64.
-	Result string `json:"result,required"`
+	Result string `json:"result" api:"required"`
 	// The status of the image generation call.
 	//
 	// Any of "in_progress", "completed", "generating", "failed".
-	Status string `json:"status,required"`
+	Status string `json:"status" api:"required"`
 	// The type of the image generation call. Always `image_generation_call`.
-	Type constant.ImageGenerationCall `json:"type,required"`
+	Type constant.ImageGenerationCall `json:"type" api:"required"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
 	JSON struct {
 		ID          respjson.Field
@@ -616,17 +700,17 @@ func (r *ConversationItemImageGenerationCall) UnmarshalJSON(data []byte) error {
 // A tool call to run a command on the local shell.
 type ConversationItemLocalShellCall struct {
 	// The unique ID of the local shell call.
-	ID string `json:"id,required"`
+	ID string `json:"id" api:"required"`
 	// Execute a shell command on the server.
-	Action ConversationItemLocalShellCallAction `json:"action,required"`
+	Action ConversationItemLocalShellCallAction `json:"action" api:"required"`
 	// The unique ID of the local shell tool call generated by the model.
-	CallID string `json:"call_id,required"`
+	CallID string `json:"call_id" api:"required"`
 	// The status of the local shell call.
 	//
 	// Any of "in_progress", "completed", "incomplete".
-	Status string `json:"status,required"`
+	Status string `json:"status" api:"required"`
 	// The type of the local shell call. Always `local_shell_call`.
-	Type constant.LocalShellCall `json:"type,required"`
+	Type constant.LocalShellCall `json:"type" api:"required"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
 	JSON struct {
 		ID          respjson.Field
@@ -648,17 +732,17 @@ func (r *ConversationItemLocalShellCall) UnmarshalJSON(data []byte) error {
 // Execute a shell command on the server.
 type ConversationItemLocalShellCallAction struct {
 	// The command to run.
-	Command []string `json:"command,required"`
+	Command []string `json:"command" api:"required"`
 	// Environment variables to set for the command.
-	Env map[string]string `json:"env,required"`
+	Env map[string]string `json:"env" api:"required"`
 	// The type of the local shell action. Always `exec`.
-	Type constant.Exec `json:"type,required"`
+	Type constant.Exec `json:"type" api:"required"`
 	// Optional timeout in milliseconds for the command.
-	TimeoutMs int64 `json:"timeout_ms,nullable"`
+	TimeoutMs int64 `json:"timeout_ms" api:"nullable"`
 	// Optional user to run the command as.
-	User string `json:"user,nullable"`
+	User string `json:"user" api:"nullable"`
 	// Optional working directory to run the command in.
-	WorkingDirectory string `json:"working_directory,nullable"`
+	WorkingDirectory string `json:"working_directory" api:"nullable"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
 	JSON struct {
 		Command          respjson.Field
@@ -681,15 +765,15 @@ func (r *ConversationItemLocalShellCallAction) UnmarshalJSON(data []byte) error 
 // The output of a local shell tool call.
 type ConversationItemLocalShellCallOutput struct {
 	// The unique ID of the local shell tool call generated by the model.
-	ID string `json:"id,required"`
+	ID string `json:"id" api:"required"`
 	// A JSON string of the output of the local shell tool call.
-	Output string `json:"output,required"`
+	Output string `json:"output" api:"required"`
 	// The type of the local shell tool call output. Always `local_shell_call_output`.
-	Type constant.LocalShellCallOutput `json:"type,required"`
+	Type constant.LocalShellCallOutput `json:"type" api:"required"`
 	// The status of the item. One of `in_progress`, `completed`, or `incomplete`.
 	//
 	// Any of "in_progress", "completed", "incomplete".
-	Status string `json:"status,nullable"`
+	Status string `json:"status" api:"nullable"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
 	JSON struct {
 		ID          respjson.Field
@@ -710,15 +794,15 @@ func (r *ConversationItemLocalShellCallOutput) UnmarshalJSON(data []byte) error 
 // A list of tools available on an MCP server.
 type ConversationItemMcpListTools struct {
 	// The unique ID of the list.
-	ID string `json:"id,required"`
+	ID string `json:"id" api:"required"`
 	// The label of the MCP server.
-	ServerLabel string `json:"server_label,required"`
+	ServerLabel string `json:"server_label" api:"required"`
 	// The tools available on the server.
-	Tools []ConversationItemMcpListToolsTool `json:"tools,required"`
+	Tools []ConversationItemMcpListToolsTool `json:"tools" api:"required"`
 	// The type of the item. Always `mcp_list_tools`.
-	Type constant.McpListTools `json:"type,required"`
+	Type constant.McpListTools `json:"type" api:"required"`
 	// Error message if the server could not list tools.
-	Error string `json:"error,nullable"`
+	Error string `json:"error" api:"nullable"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
 	JSON struct {
 		ID          respjson.Field
@@ -740,13 +824,13 @@ func (r *ConversationItemMcpListTools) UnmarshalJSON(data []byte) error {
 // A tool available on an MCP server.
 type ConversationItemMcpListToolsTool struct {
 	// The JSON schema describing the tool's input.
-	InputSchema any `json:"input_schema,required"`
+	InputSchema any `json:"input_schema" api:"required"`
 	// The name of the tool.
-	Name string `json:"name,required"`
+	Name string `json:"name" api:"required"`
 	// Additional annotations about the tool.
-	Annotations any `json:"annotations,nullable"`
+	Annotations any `json:"annotations" api:"nullable"`
 	// The description of the tool.
-	Description string `json:"description,nullable"`
+	Description string `json:"description" api:"nullable"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
 	JSON struct {
 		InputSchema respjson.Field
@@ -767,15 +851,15 @@ func (r *ConversationItemMcpListToolsTool) UnmarshalJSON(data []byte) error {
 // A request for human approval of a tool invocation.
 type ConversationItemMcpApprovalRequest struct {
 	// The unique ID of the approval request.
-	ID string `json:"id,required"`
+	ID string `json:"id" api:"required"`
 	// A JSON string of arguments for the tool.
-	Arguments string `json:"arguments,required"`
+	Arguments string `json:"arguments" api:"required"`
 	// The name of the tool to run.
-	Name string `json:"name,required"`
+	Name string `json:"name" api:"required"`
 	// The label of the MCP server making the request.
-	ServerLabel string `json:"server_label,required"`
+	ServerLabel string `json:"server_label" api:"required"`
 	// The type of the item. Always `mcp_approval_request`.
-	Type constant.McpApprovalRequest `json:"type,required"`
+	Type constant.McpApprovalRequest `json:"type" api:"required"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
 	JSON struct {
 		ID          respjson.Field
@@ -797,15 +881,15 @@ func (r *ConversationItemMcpApprovalRequest) UnmarshalJSON(data []byte) error {
 // A response to an MCP approval request.
 type ConversationItemMcpApprovalResponse struct {
 	// The unique ID of the approval response
-	ID string `json:"id,required"`
+	ID string `json:"id" api:"required"`
 	// The ID of the approval request being answered.
-	ApprovalRequestID string `json:"approval_request_id,required"`
+	ApprovalRequestID string `json:"approval_request_id" api:"required"`
 	// Whether the request was approved.
-	Approve bool `json:"approve,required"`
+	Approve bool `json:"approve" api:"required"`
 	// The type of the item. Always `mcp_approval_response`.
-	Type constant.McpApprovalResponse `json:"type,required"`
+	Type constant.McpApprovalResponse `json:"type" api:"required"`
 	// Optional reason for the decision.
-	Reason string `json:"reason,nullable"`
+	Reason string `json:"reason" api:"nullable"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
 	JSON struct {
 		ID                respjson.Field
@@ -827,23 +911,23 @@ func (r *ConversationItemMcpApprovalResponse) UnmarshalJSON(data []byte) error {
 // An invocation of a tool on an MCP server.
 type ConversationItemMcpCall struct {
 	// The unique ID of the tool call.
-	ID string `json:"id,required"`
+	ID string `json:"id" api:"required"`
 	// A JSON string of the arguments passed to the tool.
-	Arguments string `json:"arguments,required"`
+	Arguments string `json:"arguments" api:"required"`
 	// The name of the tool that was run.
-	Name string `json:"name,required"`
+	Name string `json:"name" api:"required"`
 	// The label of the MCP server running the tool.
-	ServerLabel string `json:"server_label,required"`
+	ServerLabel string `json:"server_label" api:"required"`
 	// The type of the item. Always `mcp_call`.
-	Type constant.McpCall `json:"type,required"`
+	Type constant.McpCall `json:"type" api:"required"`
 	// Unique identifier for the MCP tool call approval request. Include this value in
 	// a subsequent `mcp_approval_response` input to approve or reject the
 	// corresponding tool call.
-	ApprovalRequestID string `json:"approval_request_id,nullable"`
+	ApprovalRequestID string `json:"approval_request_id" api:"nullable"`
 	// The error from the tool call, if any.
-	Error string `json:"error,nullable"`
+	Error string `json:"error" api:"nullable"`
 	// The output from the tool call.
-	Output string `json:"output,nullable"`
+	Output string `json:"output" api:"nullable"`
 	// The status of the tool call. One of `in_progress`, `completed`, `incomplete`,
 	// `calling`, or `failed`.
 	//
@@ -874,15 +958,15 @@ func (r *ConversationItemMcpCall) UnmarshalJSON(data []byte) error {
 // A list of Conversation items.
 type ConversationItemList struct {
 	// A list of conversation items.
-	Data []ConversationItemUnion `json:"data,required"`
+	Data []ConversationItemUnion `json:"data" api:"required"`
 	// The ID of the first item in the list.
-	FirstID string `json:"first_id,required"`
+	FirstID string `json:"first_id" api:"required"`
 	// Whether there are more items available.
-	HasMore bool `json:"has_more,required"`
+	HasMore bool `json:"has_more" api:"required"`
 	// The ID of the last item in the list.
-	LastID string `json:"last_id,required"`
+	LastID string `json:"last_id" api:"required"`
 	// The type of object returned, must be `list`.
-	Object constant.List `json:"object,required"`
+	Object constant.List `json:"object" api:"required"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
 	JSON struct {
 		Data        respjson.Field
@@ -903,7 +987,7 @@ func (r *ConversationItemList) UnmarshalJSON(data []byte) error {
 
 type ItemNewParams struct {
 	// The items to add to the conversation. You may add up to 20 items at a time.
-	Items []responses.ResponseInputItemUnionParam `json:"items,omitzero,required"`
+	Items []responses.ResponseInputItemUnionParam `json:"items,omitzero" api:"required"`
 	// Additional fields to include in the response. See the `include` parameter for
 	// [listing Conversation items above](https://platform.openai.com/docs/api-reference/conversations/list-items#conversations_list_items-include)
 	// for more information.
